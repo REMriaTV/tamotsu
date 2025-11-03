@@ -369,6 +369,8 @@ footer {
   font-size: 1.1rem;
   line-height: 1.9;
   letter-spacing: 0.15rem;
+  display: flex;
+  justify-content: center;
 }
 
 .manuscript-line {
@@ -506,5 +508,19 @@ footer {
 
   .detail-meta {
     flex-direction: column;
+  }
+
+  .manuscript {
+    height: 360px;
+    writing-mode: vertical-rl;
+    padding: 20px 12px;
+  }
+
+  .manuscript-line {
+    margin: 0 10px;
+  }
+
+  .chat-log {
+    max-height: 260px;
   }
 }
