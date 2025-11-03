@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import './App.css'
+import { supabase } from './lib/supabaseClient'
+import { useSupabaseAuth } from './hooks/useSupabaseAuth'
 
 type FocusTask = {
   id: string
+  slug: string
   title: string
   firstAction: string
   due: string
@@ -39,7 +42,12 @@ type SectionProps = {
 type ChatEntry = {
   id: string
   text: string
-  createdAt: number
+  createdAt: Date
+}
+
+type ManuscriptRecord = {
+  id: string
+  script: string
 }
 
 const STORAGE_PREFIX = 'tamotsu-task-'
@@ -47,6 +55,7 @@ const STORAGE_PREFIX = 'tamotsu-task-'
 const immediateTasks: FocusTask[] = [
   {
     id: 'trunk',
+    slug: 'trunk',
     title: '三井住友銀行オンライン口座 trunk の手続きを完了',
     firstAction: 'ビジネスダイレクトにログインし、申請ステータスと不足書類を確認する',
     due: '今日 11:00',
@@ -57,16 +66,18 @@ const immediateTasks: FocusTask[] = [
   },
   {
     id: 'skinko',
+    slug: 'skinko',
     title: 'S金庫の件を前に進める',
     firstAction: '担当窓口へ電話して必要書類・期限を再確認する',
     due: '今日 13:00',
     note: '次の訪問日をその場で仮押さえする',
-    overview: '信用金庫との手続きが宙ぶらりん。先方の動きを待つのではなく、自分から次のアクションを作る。',
+    overview: '信用金庫との手続きが宙ぶらん。先方の動きを待つのではなく、自分から次のアクションを作る。',
     initialScript:
       'S金庫の担当者に電話するまでの心のハードルを丁寧に下げていく。電話する理由、確認したいこと、終わった後の感情を書き留めておく。',
   },
   {
     id: 'kaneda',
+    slug: 'kaneda',
     title: '金田くんへ書類を送る',
     firstAction: '送付する PDF を見直し、メール本文の下書きを作る',
     due: '今日 16:00',
@@ -77,6 +88,7 @@ const immediateTasks: FocusTask[] = [
   },
   {
     id: 'egypt-visa',
+    slug: 'egypt-visa',
     title: 'エジプトビザの対応を進める',
     firstAction: 'オンライン申請ページを開き、必要項目と書類をリスト化する',
     due: '明日 午前',
@@ -87,6 +99,7 @@ const immediateTasks: FocusTask[] = [
   },
   {
     id: 'amex',
+    slug: 'amex',
     title: 'Amex を復旧させる',
     firstAction: 'サポート窓口へ電話し、再発行または解除の手順を確認する',
     due: '明日 15:00',
@@ -97,6 +110,7 @@ const immediateTasks: FocusTask[] = [
   },
   {
     id: 'expo-expense',
+    slug: 'expo-expense',
     title: '万博の経費を計上',
     firstAction: '領収書をスキャンし、Notion の経費トラッカーに入力する',
     due: '今週 金曜',
@@ -201,56 +215,243 @@ function useHashRoute(): [string | null, (id: string | null) => void] {
   return [taskId, navigate]
 }
 
-function TaskDetail({ task, onBack }: { task: FocusTask; onBack: () => void }) {
-  const storageKey = `${STORAGE_PREFIX}${task.id}`
-  const [script, setScript] = useState<string>(() => {
-    if (typeof window === 'undefined') return task.initialScript
-    const stored = window.localStorage.getItem(storageKey)
-    if (!stored) return task.initialScript
-    try {
-      const parsed = JSON.parse(stored)
-      return parsed.script ?? task.initialScript
-    } catch (error) {
-      console.error('Failed to parse stored script', error)
-      return task.initialScript
-    }
-  })
+const localFallbackKey = (taskId: string) => `${STORAGE_PREFIX}${taskId}`
 
-  const [entries, setEntries] = useState<ChatEntry[]>(() => {
-    if (typeof window === 'undefined') return []
-    const stored = window.localStorage.getItem(storageKey)
-    if (!stored) return []
-    try {
-      const parsed = JSON.parse(stored)
-      return parsed.entries ?? []
-    } catch (error) {
-      console.error('Failed to parse stored entries', error)
-      return []
-    }
-  })
+async function fetchManuscript(profileId: string, slug: string): Promise<ManuscriptRecord | null> {
+  const { data, error } = await supabase
+    .from('manuscripts')
+    .select('id, script, task_id, tasks!inner(slug)')
+    .eq('profile_id', profileId)
+    .eq('tasks.slug', slug)
+    .maybeSingle()
 
+  if (error && error.code !== 'PGRST116') {
+    console.error('Failed to fetch manuscript', error)
+  }
+
+  if (!data) return null
+
+  return { id: data.id, script: data.script }
+}
+
+type SupabaseChatRow = {
+  id: string
+  message: string
+  created_at: string
+}
+
+async function fetchChatEntries(profileId: string, slug: string): Promise<ChatEntry[]> {
+  const { data, error } = await supabase
+    .from('chat_entries')
+    .select('id, message, created_at, tasks!inner(slug)')
+    .eq('profile_id', profileId)
+    .eq('tasks.slug', slug)
+    .order('created_at', { ascending: false })
+
+  if (error) {
+    console.error('Failed to fetch chat entries', error)
+    return []
+  }
+
+  return (data ?? []).map((row: SupabaseChatRow) => ({
+    id: row.id,
+    text: row.message,
+    createdAt: new Date(row.created_at),
+  }))
+}
+
+async function ensureTask(task: FocusTask): Promise<string> {
+  const { data } = await supabase
+    .from('tasks')
+    .select('id, slug')
+    .eq('slug', task.slug)
+    .maybeSingle()
+
+  if (data) return data.id
+
+  const { data: inserted, error } = await supabase
+    .from('tasks')
+    .insert({
+      slug: task.slug,
+      title: task.title,
+      overview: task.overview,
+      first_action: task.firstAction,
+      due: task.due,
+      note: task.note,
+      initial_script: task.initialScript,
+    })
+    .select()
+    .single()
+
+  if (error || !inserted) {
+    throw error ?? new Error('Failed to insert task')
+  }
+
+  return inserted.id
+}
+
+async function saveManuscript(
+  profileId: string,
+  task: FocusTask,
+  manuscriptId: string | null,
+  script: string,
+): Promise<string> {
+  const taskId = await ensureTask(task)
+
+  if (manuscriptId) {
+    const { data, error } = await supabase
+      .from('manuscripts')
+      .update({ script })
+      .eq('id', manuscriptId)
+      .eq('profile_id', profileId)
+      .select('id')
+      .maybeSingle()
+
+    if (error) {
+      console.error('Failed to update manuscript', error)
+      throw error
+    }
+
+    return data?.id ?? manuscriptId
+  }
+
+  const { data, error } = await supabase
+    .from('manuscripts')
+    .insert({ profile_id: profileId, task_id: taskId, script })
+    .select('id')
+    .single()
+
+  if (error || !data) {
+    console.error('Failed to insert manuscript', error)
+    throw error ?? new Error('Manuscript insert failed')
+  }
+
+  return data.id
+}
+
+async function saveChatEntry(profileId: string, task: FocusTask, text: string): Promise<ChatEntry> {
+  const taskId = await ensureTask(task)
+
+  const { data, error } = await supabase
+    .from('chat_entries')
+    .insert({ profile_id: profileId, task_id: taskId, message: text })
+    .select('id, message, created_at')
+    .single()
+
+  if (error || !data) {
+    console.error('Failed to insert chat entry', error)
+    throw error ?? new Error('chat entry insert failed')
+  }
+
+  return {
+    id: data.id,
+    text: data.message,
+    createdAt: new Date(data.created_at),
+  }
+}
+
+function TaskDetail({ task, onBack, profileId }: { task: FocusTask; onBack: () => void; profileId: string }) {
+  const [script, setScript] = useState<string>(task.initialScript)
+  const [manuscriptId, setManuscriptId] = useState<string | null>(null)
+  const [entries, setEntries] = useState<ChatEntry[]>([])
   const [input, setInput] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let mounted = true
+
+    const localKey = localFallbackKey(task.id)
+
+    const bootstrap = async () => {
+      try {
+        const manuscript = await fetchManuscript(profileId, task.slug)
+        const chats = await fetchChatEntries(profileId, task.slug)
+
+        if (mounted) {
+          if (manuscript) {
+            setScript(manuscript.script)
+            setManuscriptId(manuscript.id)
+          } else {
+            setScript(task.initialScript)
+            setManuscriptId(null)
+          }
+
+          setEntries(chats)
+          setLoading(false)
+        }
+      } catch (err) {
+        console.error(err)
+        if (mounted) {
+          setError('オンライン同期に失敗。ローカル保存へ切り替えます。')
+          setLoading(false)
+
+          if (typeof window !== 'undefined') {
+            const fallback = window.localStorage.getItem(localKey)
+            if (fallback) {
+              try {
+                const parsed = JSON.parse(fallback)
+                setScript(parsed.script ?? task.initialScript)
+                setEntries((parsed.entries ?? []).map((entry: any) => ({
+                  id: entry.id,
+                  text: entry.text,
+                  createdAt: new Date(entry.createdAt),
+                })))
+              } catch (parseError) {
+                console.error('Failed to parse local fallback', parseError)
+              }
+            }
+          }
+        }
+      }
+    }
+
+    bootstrap()
+
+    return () => {
+      mounted = false
+    }
+  }, [profileId, task])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
-    const payload = JSON.stringify({ script, entries })
-    window.localStorage.setItem(storageKey, payload)
-  }, [entries, script, storageKey])
+    const payload = JSON.stringify({
+      script,
+      entries: entries.map((entry) => ({
+        ...entry,
+        createdAt: entry.createdAt.toISOString(),
+      })),
+    })
+    window.localStorage.setItem(localFallbackKey(task.id), payload)
+  }, [entries, script, task.id])
 
   const scriptParagraphs = useMemo(() => script.split(/\n+/).filter((line) => line.trim().length > 0), [script])
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     const trimmed = input.trim()
     if (!trimmed) return
 
-    const entry: ChatEntry = {
-      id: `${Date.now()}`,
-      text: trimmed,
-      createdAt: Date.now(),
-    }
-    setEntries((prev) => [entry, ...prev])
-    setScript((prev) => (prev ? `${prev}\n\n${trimmed}` : trimmed))
     setInput('')
+
+    try {
+      const manuscriptKey = await saveManuscript(profileId, task, manuscriptId, script ? `${script}\n\n${trimmed}` : trimmed)
+      setManuscriptId(manuscriptKey)
+      setScript((prev) => (prev ? `${prev}\n\n${trimmed}` : trimmed))
+
+      const entry = await saveChatEntry(profileId, task, trimmed)
+      setEntries((prev) => [entry, ...prev])
+    } catch (err) {
+      console.error(err)
+      setError('投稿の保存に失敗しました。再度お試しください。')
+      setScript((prev) => (prev ? `${prev}\n\n${trimmed}` : trimmed))
+
+      const entry: ChatEntry = {
+        id: `${Date.now()}`,
+        text: trimmed,
+        createdAt: new Date(),
+      }
+      setEntries((prev) => [entry, ...prev])
+    }
   }
 
   return (
@@ -258,6 +459,8 @@ function TaskDetail({ task, onBack }: { task: FocusTask; onBack: () => void }) {
       <button className="back-button" type="button" onClick={onBack}>
         ← リストに戻る
       </button>
+
+      {error && <p className="error-banner">{error}</p>}
 
       <div className="detail-header">
         <div>
@@ -284,7 +487,9 @@ function TaskDetail({ task, onBack }: { task: FocusTask; onBack: () => void }) {
             <p className="section-description">縦書きで気持ちと手順を残す。チャットに書いた言葉がここに積み重なる。</p>
           </div>
           <div className="manuscript">
-            {scriptParagraphs.length === 0 ? (
+            {loading ? (
+              <p className="manuscript-placeholder">読み込み中...</p>
+            ) : scriptParagraphs.length === 0 ? (
               <p className="manuscript-placeholder">まだ原稿は空です。右側に書いた言葉がここに積もります。</p>
             ) : (
               scriptParagraphs.map((paragraph, index) => (
@@ -309,7 +514,7 @@ function TaskDetail({ task, onBack }: { task: FocusTask; onBack: () => void }) {
               ) : (
                 entries.map((entry) => (
                   <article key={entry.id} className="chat-entry">
-                    <time>{new Date(entry.createdAt).toLocaleString('ja-JP', { hour: '2-digit', minute: '2-digit' })}</time>
+                    <time>{entry.createdAt.toLocaleString('ja-JP', { hour: '2-digit', minute: '2-digit' })}</time>
                     <p>{entry.text}</p>
                   </article>
                 ))
@@ -327,7 +532,7 @@ function TaskDetail({ task, onBack }: { task: FocusTask; onBack: () => void }) {
                   }
                 }}
               />
-              <button type="button" onClick={handleSubmit}>
+              <button type="button" onClick={handleSubmit} disabled={!profileId}>
                 送る
               </button>
             </div>
@@ -450,13 +655,31 @@ function Dashboard({ onSelectTask }: { onSelectTask: (id: string) => void }) {
 
 export default function App() {
   const [currentTaskId, navigate] = useHashRoute()
+  const { profileId, loading } = useSupabaseAuth()
+
   const activeTask = useMemo(
     () => immediateTasks.find((task) => task.id === currentTaskId) ?? null,
     [currentTaskId],
   )
 
+  if (loading) {
+    return (
+      <div className="loading-screen">
+        <p>セッションを準備中...</p>
+      </div>
+    )
+  }
+
+  if (!profileId) {
+    return (
+      <div className="loading-screen">
+        <p>ログインに失敗しました。ページを再読み込みしてください。</p>
+      </div>
+    )
+  }
+
   if (activeTask) {
-    return <TaskDetail task={activeTask} onBack={() => navigate(null)} />
+    return <TaskDetail task={activeTask} onBack={() => navigate(null)} profileId={profileId} />
   }
 
   return <Dashboard onSelectTask={navigate} />
