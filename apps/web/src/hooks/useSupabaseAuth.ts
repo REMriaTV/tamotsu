@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabaseClient'
 export function useSupabaseAuth() {
   const [profileId, setProfileId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     let mounted = true
@@ -11,28 +12,34 @@ export function useSupabaseAuth() {
     const ensureSession = async () => {
       const {
         data: { session },
+        error: sessionError,
       } = await supabase.auth.getSession()
 
-      if (!session) {
-        const {
-          data: { user },
-          error,
-        } = await supabase.auth.signInAnonymously()
+      if (sessionError) {
+        console.error('getSession error', sessionError)
+      }
 
-        if (error) {
-          console.error('Failed to sign in anonymously', error)
-          setLoading(false)
+      if (!session) {
+        const result = await supabase.auth.signInAnonymously()
+
+        if (result.error) {
+          console.error('Failed to sign in anonymously', result.error)
+          if (mounted) {
+            setError('匿名ログインに失敗しました。匿名サインインが有効か確認してください。')
+            setLoading(false)
+          }
           return
         }
 
+        const user = result.data.user
         if (user && mounted) {
           const { error: profileError } = await supabase
             .from('profiles')
-            .insert({ id: user.id })
-            .single()
+            .upsert({ id: user.id }, { onConflict: 'id' })
 
           if (profileError && profileError.code !== '23505') {
-            console.error('Failed to insert profile', profileError)
+            console.error('Failed to upsert profile', profileError)
+            setError('プロフィール作成に失敗しました。')
           }
 
           setProfileId(user.id)
@@ -47,11 +54,11 @@ export function useSupabaseAuth() {
 
         const { error: profileError } = await supabase
           .from('profiles')
-          .insert({ id: userId })
-          .single()
+          .upsert({ id: userId }, { onConflict: 'id' })
 
         if (profileError && profileError.code !== '23505') {
           console.error('Failed to ensure profile', profileError)
+          setError('プロフィール作成に失敗しました。')
         }
 
         setLoading(false)
@@ -75,5 +82,5 @@ export function useSupabaseAuth() {
     }
   }, [])
 
-  return { profileId, loading }
+  return { profileId, loading, error }
 }

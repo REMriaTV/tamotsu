@@ -655,7 +655,7 @@ function Dashboard({ onSelectTask }: { onSelectTask: (id: string) => void }) {
 
 export default function App() {
   const [currentTaskId, navigate] = useHashRoute()
-  const { profileId, loading } = useSupabaseAuth()
+  const { profileId, loading, error } = useSupabaseAuth()
 
   const activeTask = useMemo(
     () => immediateTasks.find((task) => task.id === currentTaskId) ?? null,
@@ -666,6 +666,15 @@ export default function App() {
     return (
       <div className="loading-screen">
         <p>セッションを準備中...</p>
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="loading-screen">
+        <p>{error}</p>
+        <p className="loading-sub">Supabase の匿名サインイン設定を確認してから再読み込みしてください。</p>
       </div>
     )
   }
