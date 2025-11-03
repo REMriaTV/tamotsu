@@ -22,6 +22,12 @@
 3. `Task` モデルとローカル永続化（SwiftData/SwiftPersistence）を実装し、ユニットテストを追加。
 4. CloudKit または Supabase の同期レイヤーを選定し、試験的に同期フローを構築。
 
+### Supabase 連携の進め方
+- `backend/supabase/schema.sql` と `policies.sql` を使ってテーブルと RLS を用意。
+- `apps/web/.env.example` をもとに `.env` を作成し、`VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` を設定。
+- `npm install @supabase/supabase-js` を実行して SDK をインストール。
+- 詳細手順は `docs/supabase-setup.md` を参照。
+
 ## リポジトリ構成
 ```
  tamotsu/
