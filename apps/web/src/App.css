@@ -362,19 +362,19 @@ footer {
   border-radius: 20px;
   border: 1px solid #cbd5f5;
   background: #fffef9;
-  padding: 24px 18px;
+  padding: 24px 32px;
   overflow: auto;
   writing-mode: vertical-rl;
   font-family: 'Hiragino Mincho ProN', '游明朝体', serif;
   font-size: 1.1rem;
   line-height: 1.9;
   letter-spacing: 0.15rem;
-  display: flex;
-  justify-content: center;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .manuscript-line {
-  margin: 0 14px;
+  margin: 0 18px;
 }
 
 .manuscript-placeholder {
@@ -512,12 +512,11 @@ footer {
 
   .manuscript {
     height: 360px;
-    writing-mode: vertical-rl;
-    padding: 20px 12px;
+    padding: 20px 24px;
   }
 
   .manuscript-line {
-    margin: 0 10px;
+    margin: 0 16px;
   }
 
   .chat-log {
